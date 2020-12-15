@@ -1,0 +1,848 @@
+---
+title: "for_graphs"
+author: "Ana Castaner"
+date: "12/7/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(shiny)
+library(tidyverse)
+library(readr)
+library(ggplot2)
+library(dplyr, warn.conflicts = FALSE)
+library(ggforce)
+library(plotly)
+library(rstanarm)
+library(tidycensus)
+library(readxl)
+library(tidymodels)
+library(sf)
+library(gt)
+library(broom.mixed)
+library(gtsummary)
+```
+
+```{r}
+# DATA READ-IN
+
+# Read-in 2016 presidential election results data at the county-level
+
+electionpct_bycounty <- read_csv("raw_data/2016_US_County_Level_Presidential_Results.csv") %>% 
+    select(votes_dem:combined_fips)
+
+# Read-in county-level JHU COVID-19 data
+
+us_covid_confirmed_url <- "raw_data/time_series_covid19_confirmed_US.csv"
+
+c_cases_bycounty <- read_csv(us_covid_confirmed_url) %>% 
+    select(-iso2, -iso3, -code3)
+
+# Join Covid data + 2016 presidential election data 
+# This is the dataset with TOTAL cases in the county for each date (i.e.
+# cumulative cases up to that date, for each date)
+
+combined_bycounty <- left_join(electionpct_bycounty,c_cases_bycounty,
+                               by = c("combined_fips" = "FIPS")) %>% 
+  select(-votes_dem, -votes_gop, -total_votes, -diff, -per_point_diff,
+         -Lat, - Long_, -Country_Region, -UID, -Combined_Key)
+
+# Since I was unable to find a dataset reporting the new cases in each county
+# per day, I made my own! 
+
+  # This is the long version of the dataset (each date is one row) and it
+  # includes both the total # of cases & the number of new cases per day
+
+dailychg_countycases <- combined_bycounty %>% 
+  pivot_longer(cols = c(`1/22/20`:`12/4/20`),
+               names_to = "date",
+               values_to = "num_cases") %>% 
+  group_by(combined_fips) %>% 
+  mutate(date_contin = row_number()) %>% 
+  group_by(combined_fips) %>% 
+  mutate(date_new = as.Date(date, "%m/%d/%Y")) %>%
+  
+  # Had to add the following line in order to make the date variable line
+  # up with what it was in the original database (for whatever reason,
+  # the mutate above didn't work perfectly).
+  
+  mutate(date_new = date_new + 2000*365.25 - 15) %>%
+  arrange(date_new, .by_group = TRUE) %>%
+  
+  # Took a while to figure out the following. The next line of code actually
+  # is what takes the dataset from cumulative cases to *new* cases
+  # for each date.
+  
+  mutate(new_cases = num_cases - lag(num_cases, default = first(num_cases)))
+
+  # This is the wide (smaller) version of the dataset (dates are columns) & it
+  # only has the # of NEW cases per day
+
+dailychg_countycases_wide <- dailychg_countycases %>%
+  select(-date, -date_contin, -num_cases) %>% 
+  pivot_wider(names_from = "date_new", 
+              values_from = "new_cases")
+
+
+# Retrieving a random variable from the census in order to get the geometry
+# for each county - needed for plotting. 
+
+# for_mapping <- get_acs(geography = "county",
+#                        variables = c(medincome = "B19013_001", 
+#                             fb = "B05012_003", totp = "B05012_001"),
+#                        year = 2018,
+#                        output = "wide",
+#                        geometry = TRUE)
+
+# Writing a shapefile in order save the geometry for each county locally,
+# without needing to retrieve it from the Census API. This way, I do not
+# have to use the Census API every time I want to build my map plots.
+
+# st_write(for_mapping, "for_mapping.shp", delete_layer = TRUE)
+
+# Reading in the data with the mapping information for each county
+
+for_mapping <- tibble(st_read("raw_data/for_mapping.shp")) %>% 
+  select(GEOID, NAME, geometry) %>% 
+  mutate(GEOID = as.double(GEOID))
+
+```
+
+
+
+
+```{r}
+# CODE FOR MY FIRST TWO GRAPHS! "MAPPING THE OUTBREAK" TAB
+
+# The following code takes the dataset containing new cases for each county on
+# a specific date and makes it the amount of new cases per *month*. I 
+# was able to accomplish this by grouping by the month variable and the 
+# unique FIPS identifier for each county and then just adding up new cases
+# for every day in that month (each row is a specific date).
+
+forjoin_p1 <- dailychg_countycases %>% 
+  mutate(year = format(date_new, "%Y"),
+         month = format(date_new, "%m"),
+         day = format(date_new, "%d")) %>% 
+  group_by(month, combined_fips) %>% 
+  mutate(totalcases_permonth = sum(new_cases)) %>% 
+  select(combined_fips, month, totalcases_permonth) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = month,
+              values_from = totalcases_permonth) %>% 
+  distinct()
+
+forjoin_p1_2 <- left_join((dailychg_countycases %>% 
+                           mutate(favor_dem = if_else(per_dem > per_gop,
+                                                      1,
+                                                      0)) %>%
+                           select(combined_fips, state_abbr,
+                                  Admin2, favor_dem) %>% 
+                           distinct()),
+                        forjoin_p1,
+                        by = "combined_fips") %>% 
+  select(-`01`, -`02`, -`12`) 
+
+
+for_plot1_st <- left_join(forjoin_p1_2,for_mapping,
+                         by= c("combined_fips" = "GEOID")) %>% 
+  select(-NAME)
+
+# Reading in the population data
+
+readin_population2 <- read_csv("raw_data/census_county_pop2.csv")
+
+# The population data has the FIPS code separated into various columns,
+# unlike the COVID-19 data. Thus, I needed to paste them together and
+# also subset them to make them exactly like the COVID data (they need
+# to be exactly alike for the join).
+
+population_data <- readin_population2 %>% 
+  select(STATE, COUNTY, STNAME, CTYNAME, POPESTIMATE2019) %>%
+  rowwise %>% 
+  mutate(FIPS = paste(c(STATE, COUNTY), collapse = "")) %>% 
+  mutate(FIPS_forjoin = if_else(str_sub(FIPS, 1, 1) == 0,
+                                str_sub(FIPS, 2, -1),
+                                FIPS)) %>% 
+  mutate(FIPS_forjoin = as.double(FIPS_forjoin)) %>% 
+  select(POPESTIMATE2019, FIPS_forjoin)
+
+
+data_normalizingcases_withpop <- inner_join(for_plot1_st, population_data,
+           by = c("combined_fips" = "FIPS_forjoin"))  
+
+
+# Write shapefile for the Mapping the Outbreak tab - this will go in app
+
+# st_write(data_normalizingcases_withpop, "for_plots1_2.shp",
+# delete_layer = TRUE)
+
+# Read in shapefile the way you would in app
+# Needed to rename the columns, as reading them in from the shapefile 
+# changes their original names for some reason
+
+for_plots1_2 <- tibble(st_read("data_forapp/for_plots1_2.shp")) %>%
+  rename("combined_fips" = cmbnd_f,
+         "state_abbr" = stt_bbr,
+         "favor_dem" = favr_dm,
+         "pop_estimate" = POPESTI,
+         "March" = X03, "April" = X04, "May" = X05, "June" = X06, "July" = X07,
+         "August" = X08, "September" = X09, "October" = X10, "November" = X11) 
+
+# FOR the first PLOTS - which visualize covid per month by county, for a 
+# specific state.
+
+# Replicate input for plot in app
+
+plot1_months <- "May"
+
+# Replicate reactive data for plot in app
+
+dataInput_1 <- for_plots1_2 %>%
+  filter(state_abbr == "CA") %>% 
+  mutate(cases_selectedmonth = ifelse(favor_dem == 1,
+                                      NA, get(plot1_months)))
+
+# Replicate plot rendering for app
+# Biggest trouble here was figuring out how to leave out the Democratic counties
+# from the visualization. After much searching, the easiest solution seemed
+# to be to make the cases in those counties as NAs and then assigning NA
+# values to be filled as white.
+
+ggplot(st_sf(tibble(dataInput_1)), aes(fill = cases_selectedmonth)) +
+            geom_sf() +
+            scale_fill_gradient(low = "yellow",
+                                high =  "red",
+                                na.value = "white") +
+            theme_bw() +
+            labs(title = "Visualization of new COVID-19 cases
+                 per month in Republican counties",
+                 fill = "Number of confirmed cases") +
+            theme(axis.text = element_text(size = 10))
+
+
+# FOR the second PLOTS - covid per month by county, taking into account 
+# POPULATION
+
+# Replicate input for plot in app
+
+plot1_months <- "May"
+
+# Replicate reactive data for plot in app
+
+dataInput_3 <- for_plots1_2 %>%
+  filter(state_abbr == "CA") %>% 
+  mutate(cases_selectedmonth = ifelse(favor_dem == 1,
+                                      NA,
+                                      (get(plot1_months)/pop_estimate)*1000))
+
+# Replicate plot rendering for app
+
+ggplot(st_sf(tibble(dataInput_3)), aes(fill = cases_selectedmonth)) +
+  geom_sf() +
+  scale_fill_gradient(low = "yellow",
+                      high =  "red",
+                      na.value = "white") +
+  theme_bw() +
+  labs(title = "Visualization of COVID-19 cases in Republican counties",
+       fill = "Number of confirmed cases per 1000 people") +
+  theme(axis.text = element_text(size = 10))
+
+
+
+```
+
+
+```{r}
+# FOR "FLATTENING THE CURVE" TAB
+
+# Creating the dataset using the mapping data already used in the first
+# plots. 
+
+data_curve <- for_plots1_2 %>%
+  select(-geometry) %>% 
+  rename("03" = March, "04" = April, "05" = May, "06" = June, "07" = July,
+         "08" = August, "09" = September, "10" = October, "11" = November) %>% 
+            pivot_longer(cols = c(`03`:`11`),
+                         names_to = "month",
+                         values_to = "new_cases") %>%
+  mutate(month = as.double(month)) %>% 
+  mutate(newcases_per100k = (new_cases/pop_estimate)*100000) %>% 
+  group_by(state_abbr, favor_dem, month) %>% 
+  mutate(newcases_per100k_avg = mean(newcases_per100k)) %>% 
+  select(state_abbr, favor_dem, month, newcases_per100k_avg) %>% 
+  distinct()
+
+# Writing csv of the final data to use in my app
+
+# write.csv(data_curve, "data_curve.csv")
+
+# Reading in data as I would in app
+
+data_curve <- read_csv("data_forapp/data_curve.csv") %>% 
+  select(-X1)
+
+# Creating a sample plot for what I would like to do in my app
+# Will be reactive in app - filters data by state
+
+data_curve %>% 
+  filter(state_abbr == "DC") %>% 
+  ggplot(aes(month, newcases_per100k_avg, color = as.factor(favor_dem))) +
+    geom_line(aes(group = favor_dem)) +
+    scale_x_continuous(breaks = c(3, 4, 5, 6, 7, 8, 9, 10, 11),
+                       labels = c("Mar.", "Apr.", "May", "Jun.", "Jul.", "Aug.",
+                                  "Sept.", "Oct.", "Nov.")) +
+    scale_color_manual(values = c("tomato2", "skyblue1"),
+                       labels = c("Republican", "Democrat")) +
+    theme_bw() +
+    labs(title = "Average monthly COVID-19 cases for counties in
+         state by political party",
+       x = "Month of 2020",
+       y = "Average COVID-19 cases per 100,000 people",
+       color = "Party")
+
+# SECOND PLOT FOR THIS TAB
+# Making a similar plot, but of the entire U.S. as a summary plot for the tab
+
+# First, I edit the data to get a summary for the entire United States. 
+# I did this by grouping by favor_dem and month, and then mutating to 
+# get the mean of new cases per 100,000 people. Then I used the distinct() 
+# function to only keep the monthly values for the entire U.S.
+
+flattencurve_usplot <- for_plots1_2 %>%
+  select(-geometry) %>% 
+  rename("03" = March, "04" = April, "05" = May, "06" = June, "07" = July,
+         "08" = August, "09" = September, "10" = October, "11" = November) %>% 
+  pivot_longer(cols = c(`03`:`11`),
+               names_to = "month",
+               values_to = "new_cases") %>%
+  mutate(month = as.double(month)) %>% 
+  mutate(newcases_per100k = (new_cases/pop_estimate)*100000) %>% 
+  group_by(favor_dem, month) %>% 
+  mutate(newcases_per100k_avg = mean(newcases_per100k)) %>% 
+  select(favor_dem, month, newcases_per100k_avg) %>% 
+  distinct()
+
+# Write csv of final data for app
+
+# write.csv(flattencurve_usplot, "flattencurve_usplot.csv")
+
+# Read in data as though in app
+
+flattencurve_usplot <- read_csv("data_forapp/flattencurve_usplot.csv") %>% 
+  select(-X1)
+
+# Practice visualization
+# This visualization is for the entire United States
+
+flattencurve_usplot %>% 
+  ggplot(aes(month, newcases_per100k_avg, color = as.factor(favor_dem))) +
+    geom_line(aes(group = favor_dem)) +
+    scale_x_continuous(breaks = c(3, 4, 5, 6, 7, 8, 9, 10, 11),
+                       labels = c("Mar.", "Apr.", "May", "Jun.", "Jul.", "Aug.",
+                                  "Sept.", "Oct.", "Nov.")) +
+    scale_color_manual(values = c("tomato2", "skyblue1"),
+                       labels = c("Republican", "Democrat")) +
+    theme_bw() +
+    labs(title = "Average monthly COVID-19 cases for counties in the U.S. by
+         predominant political party",
+         x = "Month of 2020",
+         y = "Average COVID-19 cases per 100,000 people",
+         color = "Party")
+
+
+
+
+```
+
+
+
+Equation for my model:
+
+$$ (log(normalizedcasesdec4))_i = \beta_0 + \beta_1 favor\_dem_i + 
+\beta_2 pop\_density\_per1k_i +  \beta_3 favor\_dem_i *pop\_density\_per1k_i 
++ \epsilon_i $$
+
+```{r}
+# MODELING = THE following is creating data used for modeling! 
+
+# Reading in population data
+
+readin_population2 <- read_csv("raw_data/census_county_pop2.csv")
+
+population_data <- readin_population2 %>% 
+  select(STATE, COUNTY, STNAME, CTYNAME, POPESTIMATE2019) %>%
+  rowwise %>% 
+  mutate(FIPS = paste(c(STATE, COUNTY), collapse = "")) %>% 
+  mutate(FIPS_forjoin = if_else(str_sub(FIPS, 1, 1) == 0,
+                                str_sub(FIPS, 2, -1),
+                                FIPS)) %>% 
+  mutate(FIPS_forjoin = as.double(FIPS_forjoin))
+
+# Joining the covid & voter data with the new population data
+
+data_normalizingcases_withpop <- inner_join(combined_bycounty, population_data,
+           by = c("combined_fips" = "FIPS_forjoin"))  %>% 
+  mutate(normalized_casesdec4 = (`12/4/20`/POPESTIMATE2019)*1000)
+
+# Read in excel w/ county-level information from census (2010) on land area size
+# For reference, variable LND110210D = Land area in square miles 2010
+
+readin_landsize <- read_excel("raw_data/census_landarea_2010.xls")
+
+landsize <- readin_landsize %>% 
+  select(Areaname, STCOU, LND110210D) %>% 
+  filter(Areaname != "UNITED STATES") %>% 
+  rename("land_area" = LND110210D) %>% 
+  mutate(FIPS_forjoin = if_else(str_sub(STCOU, 1, 1) == 0,
+                                str_sub(STCOU, 2, -1),
+                                STCOU)) %>% 
+  mutate(FIPS_forjoin = as.double(FIPS_forjoin))
+
+
+data_formodel_inter <- inner_join(data_normalizingcases_withpop, landsize,
+           by = c("combined_fips" = "FIPS_forjoin")) %>% 
+  select(-STCOU, -Areaname) %>% 
+  mutate(pop_density_per1k = (POPESTIMATE2019/land_area)*1000) %>% 
+  mutate(log_normalized_casesdec4 = log(normalized_casesdec4)) %>% 
+  mutate(favor_dem = if_else(per_dem > per_gop, 1, 0))
+
+data_formodel <- data_formodel_inter %>% 
+  pivot_longer(cols = c(`1/22/20`:`12/4/20`),
+               names_to = "date",
+               values_to = "num_cases") %>% 
+  group_by(combined_fips) %>% 
+  mutate(date_contin = row_number()) %>% 
+  select(-STATE, -COUNTY, -STNAME)
+
+# Write a csv for use to build model in app
+
+# Write.csv(data_formodel_inter, "data_formodel.csv")
+
+# Read in from csv, as will do in app
+
+data_formodel <- read_csv("data_forapp/data_formodel.csv") %>% 
+  select(-X1)
+
+
+# Running my model
+
+f2 <- stan_glm(log_normalized_casesdec4 ~ favor_dem + favor_dem*pop_density_per1k,
+         data = (data_formodel %>% 
+                   filter(log_normalized_casesdec4 != -Inf)),
+         refresh = 0)
+
+print(f2, digits = 10)
+
+# Seeing how many counties I excluded from my analysis - about 336 counties.
+# This is important to recognize as perhaps a limitation of the model,
+# as it's excluding around 10% of counties in the United States.
+# It might be of interesting to run some statistics and further analysis to
+# see the makeup of these 336 counties.
+
+data_pp <- data_formodel %>% 
+  filter(log_normalized_casesdec4 != -Inf)
+
+# Creating new observation for posterior_predict()
+# I am choosing to run posterior predict on a Democratic and Republican 
+# county both with mean pop_density_per1k (mean for the sample). I think
+# that this is a very interesting visualization and a useful one to see
+# the predictions the model makes.
+
+new_obs <- tibble(favor_dem = c(1, 0),
+                  pop_density_per1k = 274844) 
+
+# Running posterior_predict()
+
+pp <- posterior_predict(f2, 
+                        newdata = new_obs) %>%
+  as_tibble() %>% 
+  mutate_all(as.numeric)
+
+# Making graph - posterior predictive distribution for Democratic &
+# County with average population densities
+
+pp %>% 
+  rename(Democratic = `1`,
+         Republican = `2`) %>% 
+  pivot_longer(cols = Democratic:Republican, 
+               names_to = "Party",
+               values_to = "log_normalized_casesdec4") %>% 
+  ggplot(aes(log_normalized_casesdec4, fill = Party)) +
+    geom_histogram(aes(y = after_stat(count/sum(count))),
+                   alpha = 0.4, 
+                   bins = 100, 
+                   position = "identity") +
+    labs(title = "Posterior Predictive Distribution",
+         subtitle = "For Democratic and Republican counties with average population densities",
+         x = "COVID-19 Cases per 1000 people",
+         y = "Probability") + 
+    scale_fill_manual(values = c("skyblue1", "tomato2"),
+                      labels = c("Democratic", "Republican")) +
+    scale_x_continuous(labels = scales::number_format()) +
+    scale_y_continuous(labels = scales::percent_format()) +
+    theme_classic()
+
+# Recreating how I will make the graph within the coefficients tab
+
+# In the app, the user will be able to select the input. That is, they
+# will be able to, in this case, select a coefficient for the linear
+# regression and see its posterior distribution.
+# Example input 
+
+input <- "favor_dem"
+
+# Desired output given this example input
+
+f2 %>% 
+  as_tibble() %>% 
+  rename("intercept" = `(Intercept)`) %>% 
+  ggplot(aes(x = (get(input)))) + 
+    geom_histogram(aes(y = after_stat(count/sum(count))),
+                   bins = 100,
+                   fill = "cornflowerblue") +
+    labs(title = paste("Posterior Distribution for the Coefficient of", input),
+         y = "Probability",
+         
+         # Searched around on the internet for a while and discovered that
+         # this is how to make the title change according to the input.
+         # In the app, you can see that the title changes when the user 
+         # selects a different input (as well as the graph changing).
+         
+         x = paste("Coefficient of", input)) + 
+    scale_y_continuous(labels = scales::percent_format()) +
+    theme_bw()
+
+```
+
+
+
+```{r}
+# Tab on deaths
+# This is basically the same code for my Flattening the Curve Tab, but using
+# data on deaths in the U.S., thus it will look very familiar.
+
+# Read-in county-level JHU COVID-19 data for *deaths*
+
+us_covid_deaths_url <- "raw_data/time_series_covid19_deaths_US.csv"
+
+c_deaths_bycounty <- read_csv(us_covid_deaths_url) %>% 
+    select(-iso2, -iso3, -code3)
+
+# Join Covid deaths data + 2016 presidential election data 
+# This is the dataset with TOTAL deaths in the county for each date (i.e.
+# cumulative deaths up to that date, for each date)
+
+combined_bycounty_deaths <- left_join(electionpct_bycounty,c_deaths_bycounty,
+                                      by = c("combined_fips" = "FIPS")) %>% 
+  select(-votes_dem, -votes_gop, -total_votes, -diff, -per_point_diff,
+         -Lat, - Long_, -Country_Region, -UID, -Combined_Key)
+
+# Since I was unable to find a dataset reporting the new deaths in each county
+# per day, I made my own! 
+
+  # This is the long version of the dataset (each date is one row) and it
+  # includes both the total # of deaths & the number of new deaths per day
+
+dailychg_deaths <- combined_bycounty_deaths %>% 
+  pivot_longer(cols = c(`1/22/20`:`12/4/20`),
+               names_to = "date",
+               values_to = "num_deaths") %>% 
+  group_by(combined_fips) %>% 
+  mutate(date_contin = row_number()) %>% 
+  group_by(combined_fips) %>% 
+  mutate(date_new = as.Date(date, "%m/%d/%Y")) %>%
+  
+  # Had to add the following line in order to make the date variable line
+  # up with what it was in the original database (for whatever reason,
+  # the mutate above didn't work perfectly).
+  
+  mutate(date_new = date_new + 2000*365.25 - 15) %>%
+  arrange(date_new, .by_group = TRUE) %>%
+  mutate(new_deaths = num_deaths - lag(num_deaths, default = first(num_deaths)))
+
+
+# The following code takes the dataset containing new deaths for each county on
+# a specific date and makes it the amount of new deaths per *month*. I 
+# was able to accomplish this by grouping by the month variable and the 
+# unique FIPS identifier for each county and then just adding up new deaths
+# for every day in that month (each row is a specific date).
+
+forjoin_p1 <- dailychg_deaths %>% 
+  mutate(year = format(date_new, "%Y"),
+         month = format(date_new, "%m"),
+         day = format(date_new, "%d")) %>% 
+  group_by(month, combined_fips) %>% 
+  mutate(totaldeaths_permonth = sum(new_deaths)) %>% 
+  select(combined_fips, month, totaldeaths_permonth) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = month,
+              values_from = totaldeaths_permonth) %>% 
+  distinct()
+
+forjoin_p1_2 <- left_join((dailychg_deaths %>% 
+                           mutate(favor_dem = if_else(per_dem > per_gop,
+                                                      1,
+                                                      0)) %>%
+                           select(combined_fips, state_abbr,
+                                  Admin2, favor_dem) %>% 
+                           distinct()),
+                        forjoin_p1,
+                        by = "combined_fips") %>% 
+  select(-`01`, -`02`, -`12`) 
+
+
+for_deaths_st <- left_join(forjoin_p1_2,for_mapping,
+                         by= c("combined_fips" = "GEOID")) %>% 
+  select(-NAME)
+
+
+data_normalizingcases_withpop <- inner_join(for_deaths_st, population_data,
+           by = c("combined_fips" = "FIPS_forjoin"))  
+
+
+# Write shapefile for Deaths tab
+
+# st_write(data_normalizingcases_withpop, "deaths_data.shp",
+# delete_layer = TRUE)
+
+# Read in shapefile 
+
+deaths_data <- tibble(st_read("raw_data/deaths_data.shp")) %>%
+  rename("combined_fips" = cmbnd_f,
+         "state_abbr" = stt_bbr,
+         "favor_dem" = favr_dm,
+         "pop_estimate" = POPESTI,
+         "March" = X03, "April" = X04, "May" = X05, "June" = X06, "July" = X07,
+         "August" = X08, "September" = X09, "October" = X10, "November" = X11) 
+
+# PLOT FOR THIS TAB
+# Summary of deaths in the U.S.
+
+# First edit the data to get a summary for the entire United States. 
+# I did this by grouping by favor_dem and month, and then mutating to 
+# get the mean of new deaths per 100,000 people. Then I used the distinct() 
+# function to only keep the monthly values for the entire U.S.
+
+deaths_usplot <- deaths_data %>%
+  select(-geometry) %>% 
+  rename("03" = March, "04" = April, "05" = May, "06" = June, "07" = July,
+         "08" = August, "09" = September, "10" = October, "11" = November) %>% 
+  pivot_longer(cols = c(`03`:`11`),
+               names_to = "month",
+               values_to = "new_deaths") %>%
+  mutate(month = as.double(month)) %>% 
+  mutate(newdeaths_per100k = (new_deaths/pop_estimate)*100000) %>% 
+  group_by(favor_dem, month) %>% 
+  mutate(newdeaths_per100k_avg = mean(newdeaths_per100k)) %>% 
+  select(favor_dem, month, newdeaths_per100k_avg) %>% 
+  distinct()
+
+# Write csv of final data for app
+
+# write.csv(deaths_usplot, "deaths_usplot.csv")
+
+# Read in data as though in app
+
+deaths_usplot <- read_csv("data_forapp/deaths_usplot.csv") %>% 
+  select(-X1)
+
+# Practice visualization
+# This visualization is for the entire United States
+
+deaths_usplot %>% 
+  ggplot(aes(month, newdeaths_per100k_avg, color = as.factor(favor_dem))) +
+    geom_line(aes(group = favor_dem)) +
+    scale_x_continuous(breaks = c(3, 4, 5, 6, 7, 8, 9, 10, 11),
+                       labels = c("Mar.", "Apr.", "May", "Jun.", "Jul.", "Aug.",
+                                  "Sept.", "Oct.", "Nov.")) +
+    scale_color_manual(values = c("tomato2", "skyblue1"),
+                       labels = c("Republican", "Democrat")) +
+    theme_bw() +
+    labs(title = "Average monthly COVID-19 deaths for counties in the U.S. by
+         predominant political party",
+         x = "Month of 2020",
+         y = "Average COVID-19 confirmed deaths per 100,000 people",
+         color = "Party")
+
+
+
+```
+
+
+
+```{r}
+# Tab on testing
+
+# Reading in Testing data. Eliminating data from U.S. territories that are
+# NOT states and filtering out states without totalTestsViral (~15 states).
+# That is, I'm filtering out states that do NOT report the number of total
+# PCR test specimens run, as this is necessary information
+# for the plots I will be making.
+
+testing_readin <- read_csv("raw_data/state_testing_data.csv") %>% 
+  select(date, state, positive, death, totalTestsViral) %>% 
+  filter(date == "2020-11-29") %>% 
+  filter(!state %in% c("PR", "AS", "GU", "MP", "VI")) %>% 
+  filter(!is.na(totalTestsViral))
+
+# Editing COVID-19 data from JHU to get state totals for COVID-19
+
+for_testjoin_1 <- combined_bycounty %>%
+  select(state_abbr, Province_State,`12/4/20`) %>% 
+  group_by(state_abbr) %>% 
+  filter(!is.na(`12/4/20`)) %>% 
+  mutate(state_casesdec4 = sum(`12/4/20`)) %>% 
+  select(-`12/4/20`) %>% 
+  unique()
+
+# Joining testing data with JHU state data
+
+joined_testing1 <- left_join(testing_readin, for_testjoin_1,
+                             by = c("state" = "state_abbr"))
+
+# Finding population data (2019 estimate) for each state
+
+for_testjoin_2 <- readin_population2 %>% 
+  select(STATE, COUNTY, STNAME, CTYNAME, POPESTIMATE2019) %>%
+  filter(COUNTY == "000") %>% 
+  select(STATE, STNAME, POPESTIMATE2019)
+
+# Joining testing data with population data for each state
+
+testing_almost <- left_join(joined_testing1,for_testjoin_2,
+                            by = c("Province_State" = "STNAME")) %>% 
+  select(state, Province_State, totalTestsViral,
+         state_casesdec4, death, POPESTIMATE2019) %>% 
+  mutate(totaltestsviral_per1k = (totalTestsViral/POPESTIMATE2019)*1000,
+         state_casesdec4_per1k = (state_casesdec4/POPESTIMATE2019)*1000,
+         deaths_per10k = (death/POPESTIMATE2019)*10000)
+
+# Reading in State-level elections data from 2016
+# I am reading this in from a separate database from MIT. That is, I am
+# not using the county-level 2016 presidential results to produce this data.
+# I did this because I thought it would be less effort than 
+# adding up the total number of votes for each county for each candidate and
+# finding the overall percentages for each candidate in a state. This being
+# said, the way this database is formatted, it probably required about the
+# same amount of work to clean up/manipulate as using the county-level data
+# would have been.
+
+electionsdata_state <- read_csv("raw_data/1976-2016-president.csv") %>% 
+  filter(year == 2016) %>% 
+  filter(candidate %in% c("Trump, Donald J.", "Clinton, Hillary")) %>% 
+  select(state_po, party, candidatevotes, totalvotes) %>% 
+  pivot_wider(names_from = party,
+              values_from = c(candidatevotes, totalvotes)) %>% 
+  unnest(cols = c(candidatevotes_republican, candidatevotes_democrat,
+                  totalvotes_republican)) %>% 
+  select(state_po, candidatevotes_republican, candidatevotes_democrat,
+         totalvotes_republican) %>% 
+  mutate(per_gop = candidatevotes_republican/totalvotes_republican,
+         per_dem = candidatevotes_democrat/totalvotes_republican,
+         state_lean = if_else(per_gop > per_dem,"Republican", "Democrat")) %>% 
+  select(state_po, state_lean)
+  
+# Joining testing data with 2016 elections data for each state
+
+testing <- left_join(testing_almost,electionsdata_state,
+          by = c("state" = "state_po")) 
+
+
+# Can see which 15 states were excluded from analysis with the below.
+# It's important to look at this in case the states that I excluded seem like
+# they would obviously skew my analysis.
+
+d2 <- read_csv("raw_data/state_testing_data.csv") %>% 
+  select(date, state, positive, death, totalTestsViral) %>% 
+  filter(date == "2020-11-29") %>% 
+  filter(!state %in% c("PR", "AS", "GU", "MP", "VI")) %>% 
+  filter(is.na(totalTestsViral)) %>% 
+  select(state)
+
+# Can see from the below that I excluded 10 Democratic states and 5 Republican
+# states. This seems reasonably split up and thus I do not think it renders
+# my data useless. I think my 36 states are likely still a fairly representative
+# sample.
+
+left_join(d2, electionsdata_state,
+     by = c("state" = "state_po"))  %>% 
+  ggplot(aes(state_lean)) +
+  geom_bar()
+
+
+# Write a csv with testing object for my app
+
+# write.csv(testing, "testing.csv")
+
+# Read in the csv with testing object for my app
+
+testing <- read.csv("data_forapp/testing.csv") %>% 
+  select(-X)
+
+# Plot of average number of tests per 1,000 people in each state by
+# political affiliation
+
+testing %>% 
+  group_by(state_lean) %>% 
+  mutate(us_avgtesting = mean(totaltestsviral_per1k)) %>% 
+  select(us_avgtesting, state_lean) %>% 
+  unique() %>% 
+  ggplot(aes(state_lean, us_avgtesting, fill = state_lean)) +
+    geom_col() +
+    scale_fill_manual(values = c("skyblue1", "tomato2"),
+                      labels = c("Democratic", "Republican")) +
+    labs(title = "Average tests per 1,000 people in each state by
+          political affiliation",
+         x = "Political Affiliation of Each State",
+         y = "Average Number of PCR Tests per 1,000 People") +
+    theme_bw() +
+    theme(legend.position = "none") 
+
+# Making plot of Confirmed cases vs. total PCR tests by state.
+# I added shape, color, and fill aesthetics in order to make it easy
+# to track the patterns by political affiliation. By doing this,
+# I will not make a summary plot for the whole United States, as I think
+# the smooth line ("lm" type) is fairly informative of general trends.
+
+ggplot(testing, aes(state_casesdec4_per1k,totaltestsviral_per1k,
+                    color = state_lean,
+                    shape = state_lean)) +
+  geom_point() +
+  geom_smooth(aes(color = state_lean, fill = state_lean), 
+              method = "lm") +
+  scale_fill_manual(values = c("skyblue1", "tomato2"),
+                    labels = c("Democrat", "Republican")) +
+  scale_color_manual(values = c("skyblue1", "tomato2")) +
+  labs(title = "Confirmed cases vs. total PCR tests by state",
+       fill = "State Political Leaning",
+       shape = "State Political Leaning",
+       color = "State Political Leaning",
+       x = "Confirmed Cases Per 1,000 People for Each State",
+       y = "Total PCR Tests Per 1,000 People for Each State") +
+  theme_bw() 
+
+# Making plot of deaths vs. total PCR tests by state
+
+ggplot(testing, aes(deaths_per10k,totaltestsviral_per1k,
+                    color = state_lean,
+                    shape = state_lean)) +
+  geom_point() +
+  geom_smooth(aes(color = state_lean, fill = state_lean), 
+              method = "lm") +
+  scale_fill_manual(values = c("skyblue1", "tomato2"),
+                    labels = c("Democrat", "Republican")) +
+  scale_color_manual(values = c("skyblue1", "tomato2")) +
+  labs(title = "Deaths vs. total PCR tests by state",
+       fill = "State Political Leaning",
+       shape = "State Political Leaning",
+       color = "State Political Leaning",
+       x = "Deaths Per 10,000 People for Each State",
+       y = "Total PCR Tests Per 1,000 People for Each State") +
+  theme_bw() 
+
+
+
+```
+
