@@ -29,6 +29,10 @@ library(gtsummary)
 
 # Read-in 2016 presidential election results data at the county-level
 
+# Please excuse that in this Rmd and in my app the paths to files put some lines
+# over 80 characters. Separating the paths onto two lines prevents it from
+# working.
+
 electionpct_bycounty <- read_csv("raw_data/2016_US_County_Level_Presidential_Results.csv") %>% 
     select(votes_dem:combined_fips)
 
@@ -134,19 +138,19 @@ forjoin_p1 <- dailychg_countycases %>%
   distinct()
 
 forjoin_p1_2 <- left_join((dailychg_countycases %>% 
-                           mutate(favor_dem = if_else(per_dem > per_gop,
-                                                      1,
-                                                      0)) %>%
-                           select(combined_fips, state_abbr,
-                                  Admin2, favor_dem) %>% 
-                           distinct()),
-                        forjoin_p1,
-                        by = "combined_fips") %>% 
+                             mutate(favor_dem = if_else(per_dem > per_gop,
+                                                        1,
+                                                        0)) %>%
+                             select(combined_fips, state_abbr,
+                                    Admin2, favor_dem) %>% 
+                             distinct()),
+                          forjoin_p1,
+                          by = "combined_fips") %>% 
   select(-`01`, -`02`, -`12`) 
 
 
 for_plot1_st <- left_join(forjoin_p1_2,for_mapping,
-                         by= c("combined_fips" = "GEOID")) %>% 
+                          by= c("combined_fips" = "GEOID")) %>% 
   select(-NAME)
 
 # Reading in the population data
@@ -190,8 +194,8 @@ for_plots1_2 <- tibble(st_read("data_forapp/for_plots1_2.shp")) %>%
          "March" = X03, "April" = X04, "May" = X05, "June" = X06, "July" = X07,
          "August" = X08, "September" = X09, "October" = X10, "November" = X11) 
 
-# FOR the first PLOTS - which visualize covid per month by county, for a 
-# specific state.
+# The below is for the first PLOTS - which visualize covid per month by county,
+# for a specific state.
 
 # Replicate input for plot in app
 
@@ -211,15 +215,15 @@ dataInput_1 <- for_plots1_2 %>%
 # values to be filled as white.
 
 ggplot(st_sf(tibble(dataInput_1)), aes(fill = cases_selectedmonth)) +
-            geom_sf() +
-            scale_fill_gradient(low = "yellow",
-                                high =  "red",
-                                na.value = "white") +
-            theme_bw() +
-            labs(title = "Visualization of new COVID-19 cases
-                 per month in Republican counties",
-                 fill = "Number of confirmed cases") +
-            theme(axis.text = element_text(size = 10))
+  geom_sf() +
+  scale_fill_gradient(low = "yellow",
+                      high =  "red",
+                      na.value = "white") +
+  theme_bw() +
+  labs(title = "Visualization of new COVID-19 cases
+       per month in Republican counties",
+       fill = "Number of confirmed cases") +
+  theme(axis.text = element_text(size = 10))
 
 
 # FOR the second PLOTS - covid per month by county, taking into account 
@@ -364,6 +368,7 @@ $$ (log(normalizedcasesdec4))_i = \beta_0 + \beta_1 favor\_dem_i +
 \beta_2 pop\_density\_per1k_i +  \beta_3 favor\_dem_i *pop\_density\_per1k_i 
 + \epsilon_i $$
 
+
 ```{r}
 # MODELING = THE following is creating data used for modeling! 
 
@@ -383,7 +388,8 @@ population_data <- readin_population2 %>%
 # Joining the covid & voter data with the new population data
 
 data_normalizingcases_withpop <- inner_join(combined_bycounty, population_data,
-           by = c("combined_fips" = "FIPS_forjoin"))  %>% 
+                                            by = c("combined_fips" =
+                                                     "FIPS_forjoin"))  %>% 
   mutate(normalized_casesdec4 = (`12/4/20`/POPESTIMATE2019)*1000)
 
 # Read in excel w/ county-level information from census (2010) on land area size
@@ -402,7 +408,7 @@ landsize <- readin_landsize %>%
 
 
 data_formodel_inter <- inner_join(data_normalizingcases_withpop, landsize,
-           by = c("combined_fips" = "FIPS_forjoin")) %>% 
+                                  by = c("combined_fips" = "FIPS_forjoin")) %>% 
   select(-STCOU, -Areaname) %>% 
   mutate(pop_density_per1k = (POPESTIMATE2019/land_area)*1000) %>% 
   mutate(log_normalized_casesdec4 = log(normalized_casesdec4)) %>% 
@@ -426,9 +432,10 @@ data_formodel <- read_csv("data_forapp/data_formodel.csv") %>%
   select(-X1)
 
 
-# Running my model
+# Running my model with stan_glm()
 
-f2 <- stan_glm(log_normalized_casesdec4 ~ favor_dem + favor_dem*pop_density_per1k,
+f2 <- stan_glm(log_normalized_casesdec4 ~ favor_dem +
+                 favor_dem*pop_density_per1k,
          data = (data_formodel %>% 
                    filter(log_normalized_casesdec4 != -Inf)),
          refresh = 0)
@@ -439,12 +446,14 @@ print(f2, digits = 10)
 # This is important to recognize as perhaps a limitation of the model,
 # as it's excluding around 10% of counties in the United States.
 # It might be of interesting to run some statistics and further analysis to
-# see the makeup of these 336 counties.
+# see the makeup of these 336 counties, so one could understand better 
+# whether this exclusion might skew the data.
 
 data_pp <- data_formodel %>% 
   filter(log_normalized_casesdec4 != -Inf)
 
 # Creating new observation for posterior_predict()
+
 # I am choosing to run posterior predict on a Democratic and Republican 
 # county both with mean pop_density_per1k (mean for the sample). I think
 # that this is a very interesting visualization and a useful one to see
@@ -455,8 +464,7 @@ new_obs <- tibble(favor_dem = c(1, 0),
 
 # Running posterior_predict()
 
-pp <- posterior_predict(f2, 
-                        newdata = new_obs) %>%
+pp <- posterior_predict(f2, newdata = new_obs) %>%
   as_tibble() %>% 
   mutate_all(as.numeric)
 
@@ -475,7 +483,8 @@ pp %>%
                    bins = 100, 
                    position = "identity") +
     labs(title = "Posterior Predictive Distribution",
-         subtitle = "For Democratic and Republican counties with average population densities",
+         subtitle = "For Democratic and Republican counties
+         with average population densities",
          x = "COVID-19 Cases per 1000 people",
          y = "Probability") + 
     scale_fill_manual(values = c("skyblue1", "tomato2"),
@@ -594,12 +603,14 @@ forjoin_p1_2 <- left_join((dailychg_deaths %>%
 
 
 for_deaths_st <- left_join(forjoin_p1_2,for_mapping,
-                         by= c("combined_fips" = "GEOID")) %>% 
+                           by= c("combined_fips" = "GEOID")) %>% 
   select(-NAME)
 
 
-data_normalizingcases_withpop <- inner_join(for_deaths_st, population_data,
-           by = c("combined_fips" = "FIPS_forjoin"))  
+data_normalizingcases_withpop <- inner_join(for_deaths_st,
+                                            population_data,
+                                            by = c("combined_fips" =
+                                                     "FIPS_forjoin"))  
 
 
 # Write shapefile for Deaths tab
@@ -747,7 +758,7 @@ electionsdata_state <- read_csv("raw_data/1976-2016-president.csv") %>%
 # Joining testing data with 2016 elections data for each state
 
 testing <- left_join(testing_almost,electionsdata_state,
-          by = c("state" = "state_po")) 
+                     by = c("state" = "state_po")) 
 
 
 # Can see which 15 states were excluded from analysis with the below.

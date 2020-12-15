@@ -68,17 +68,18 @@ data_formodel <- read_csv("data_forapp/data_formodel.csv") %>%
 # Building my linear model, excluding ~336 cases in the US that did not have
 # any confirmed cases on 12/04/20
 
-f1 <- stan_glm(log_normalized_casesdec4 ~ favor_dem + favor_dem*pop_density_per1k,
+f1 <- stan_glm(log_normalized_casesdec4 ~ favor_dem + 
+                 favor_dem*pop_density_per1k,
                data = (data_formodel %>% 
                          filter(log_normalized_casesdec4 != -Inf)),
                refresh = 0)
 
-# creating new observation for posterior_predict()
+# Creating new observation for posterior_predict()
 
 new_obs <- tibble(favor_dem = c(1, 0),
                   pop_density_per1k = 274844) 
 
-# running posterior_predict()
+# Running posterior_predict()
 
 pp <- posterior_predict(f1, 
                         newdata = new_obs) %>%
@@ -88,6 +89,12 @@ pp <- posterior_predict(f1,
 # Building the table for the linear regression
 
 gt_tbl <- tbl_regression(f1, intercept = TRUE,
+                         
+                         # I use the following to increase the number of 
+                         # signficant figures shown in my table for the 
+                         # regression, as some of my coefficients are very,
+                         # very small.
+                         
                          estimate_fun = function(x) 
                            style_sigfig(x, digits = 10)) %>%
       as_gt() %>%
@@ -98,7 +105,15 @@ gt_tbl <- tbl_regression(f1, intercept = TRUE,
 # Define UI for application
 ui <- navbarPage(
     "COVID-19 & U.S. Political Affiliation",
+    
+    # Setting the theme for my ShinyApp as "lumen". I chose this theme
+    # because it's very clean and simple, while also looking quite
+    # attractive and interesting. 
+    
     theme = shinytheme("lumen"),
+    
+    # Creating the first tab/home page
+    
     tabPanel("Mapping the Outbreak", 
              h3("Overview"),
              p("This project attempts to visualize and model the relationship
@@ -124,6 +139,11 @@ ui <- navbarPage(
                a few states. We can observe that in some states,
                it appears that the Democratic counties report a greater number
                of new COVID-19 cases per month than the Republican counties."),
+             
+             # I make use of fluidRow() in order to display the two plots 
+             # side-by-side. I was originally using fluidPage(), but that
+             # puts the two plots on top of each other.
+             
              fluidRow(
                selectInput("state_plot1", "State",
                            choices = plot1_states),
@@ -131,7 +151,11 @@ ui <- navbarPage(
                            choices = plot1_months),
                       column(6,plotOutput("distPlot1")),
                       column(6,plotOutput("distPlot2")),
-             ),
+               ),
+             
+             # Have this next h2() line in order to leave some blank 
+             # horizontal space between the visualization sections.
+             
              h2("  "),
              h3("Why Population is Important"),
              p("The second visualization, seen below, shows the number of
@@ -146,6 +170,10 @@ ui <- navbarPage(
                months, whereas into late fall the Republican counties surpass
                them."),
              fluidRow(
+               
+               # Recycling the input from the first plot because the choices
+               # should be the same.
+               
                selectInput("state_plot2", "State",
                            choices = plot1_states),
                selectInput("month_plot2", "Month",
@@ -154,6 +182,9 @@ ui <- navbarPage(
                column(6,plotOutput("distPlot4")),
                ),
              ),
+    
+    # Creating the first tab/home page
+    
     tabPanel("Flattening the Curve", 
              h2("Flattening the Curve"),
              h4("By state"),
@@ -162,11 +193,15 @@ ui <- navbarPage(
                 between the number of new COVID-19 cases per county and 
                 time (months). In order to better quantify this relationship,
                 this visualization came about. It depicts the number of new
-                COVID-19 cases per month for a county, accounting for population, from Mar.
-                - Nov. 2020 for a specified state. The Democratic line represents the average
-                number of new COVID-19 cases every month for Democratic counties.
+                COVID-19 cases per month for a county, accounting for
+                population, from Mar.
+                - Nov. 2020 for a specified state. The Democratic line
+                represents the average
+                number of new COVID-19 cases every
+                month for Democratic counties.
                 The Republican line represents the average
-                number of new COVID-19 cases every month for Republican counties.
+                number of new COVID-19 cases every month
+                for Republican counties.
                 As a general trend, it seems that for many states, on average
                 the Democratic counties within it had the largest number of 
                 cases per 100,000 people first, while towards fall there is a 
@@ -186,10 +221,18 @@ ui <- navbarPage(
                 per month until mid-August. In mid-August, Republican counties
                 on average surpass the Democratic counties in number of 
                 confirmed COVID-19 cases per 100,000 people."),
+             
+             # This is a static plot and while I construct it in the server,
+             # I could have also just rendered it as a picture or some other
+             # saved file, in order to save a bit of computational power.
+             
              fluidPage(
                plotOutput("distPlot6")
                )
              ),
+    
+    # Creating tab for COVID-19 deaths data
+    
     tabPanel("Data on Deaths", 
              h2("Data on Deaths"),
              h4("For the United States"),
@@ -215,6 +258,11 @@ ui <- navbarPage(
                plotOutput("distPlot12")
              )
     ),
+    
+    # Creating tab for testing data/analysis
+    # This tab is the only one made with state-level data and it's because
+    # testing data is not reported at the county-level (generally).
+    
     tabPanel("Tracking Testing",
              h2("Tracking Testing and COVID-19 by State"),
              p("Ideally, in my project I would have been able to visualize
@@ -233,7 +281,15 @@ ui <- navbarPage(
                not report data on the total amount of PCR test specimens
                processed. Of these 15 states, 10 are Democratic and 5 are
                Republican."),
+             
+             # I thought it was best to display the different plots I made
+             # with testing data as tabs within the page, so below I make 
+             # 3 different tabs.
+             
              tabsetPanel(type = "tabs",
+                         
+                         # Creating the first tab within the page
+                         
                          tabPanel("Testing Density & Political Affiliation",
                                   h3("Testing Density & Political Affiliation"),
                                   p("Below we have a visualization of the 
@@ -245,6 +301,12 @@ ui <- navbarPage(
                                     specimens taken in each state and does
                                     not represent the number of unique
                                     individuals tested."),
+                                  
+                                  # This is essentially a summary plot I 
+                                  # thought was relevant to present first,
+                                  # as it describes testing density and how
+                                  # it relates to political affiliation.
+                                  
                                   plotOutput("distPlot9")
                                   ),
                          tabPanel("Testing Density & Confirmed Cases",
@@ -283,7 +345,16 @@ ui <- navbarPage(
                                   )
                          )
              ),
+    
+    # Creating tab for my linear model
+    
     tabPanel("Model",
+             
+             # As with the testing data, I thought it would be best to present
+             # this data in tabs. It made the most sense and seemed easiest
+             # to understand if presenting the equation for the model first,
+             # then followed by the results and limitations.
+             
              tabsetPanel(type = "tabs",
                          tabPanel("Building a Linear Model",
                                   h3("Building a Linear Model"),
@@ -320,36 +391,52 @@ ui <- navbarPage(
                                   The epsilon in the equation represents the 
                                   error caused by real-world variation and
                                   is outside the scope of my model."),
-                        imageOutput("Image1"),
-                        align = "center"
+                                  imageOutput("Image1"),
+                                  align = "center"
                                   ),
                          tabPanel("Regression Results",
                                   h3("Regression Results"),
                                   p("We can see that the (Intercept) value 
-                                  is 3.80.
-               This represents the average natural log of the number of COVID-19
-               cases per 1000 people for a county in the United States on
-               December 4th,
-               2020 that is Republican and has a 0 pop_density_per1k.
-               Next, we have our favor_dem variable, which is 1 if
-               the county voted Democratic in the 2016 general election,
-               and 0 if they voted Republican. It has a value of -0.19,
-               meaning a county that is Democratic with a 0 pop_density_per1k
-               score will have slightly less cases than a Republican one
-               with 0 pop_density. Pop_density_per1k is a variable that describes
-               population density for each county, in units of 1,000 people
-               per square mile. Its coefficient has a value here of
-               -0.0000001289, which seems
-               very small, but we must remember that this has to be
-               multiplied by the value of pop_density_per1k for the county in order
-               to arrive at the decrease in the log of cases for the county.
-               The last parameter is our interaction term between favor_dem
-               and population_density, which is 0.0000001262.
-               It is the slope in the log number of COVID-19 cases for
-               a county that is Democratic and has a non-0 population density."),
+                                  is 3.80. This represents the average natural 
+                                  log of the number of COVID-19 cases per 1,000 
+                                  people for a county in the United States on 
+                                  December 4th, 2020 that is Republican 
+                                  and has a 0 pop_density_per1k. Next, we have
+                                  our favor_dem variable, which is 1 if the 
+                                  county voted Democratic in the 2016 general
+                                  election, and 0 if they voted Republican.
+                                  It has a value of -0.19, meaning a county
+                                  that is Democratic with a 0 pop_density_per1k 
+                                  score will have slightly less cases than a 
+                                  Republican one with 0 pop_density. 
+                                  Pop_density_per1k is a variable that describes 
+                                  population density for each county, in units
+                                  of 1,000 people per square mile. Its
+                                  coefficient has a value here of -0.0000001289,
+                                  which seems very small, but we must remember
+                                  that this has to be multiplied by the value 
+                                  of pop_density_per1k for the county in order 
+                                  to arrive at the decrease in the log of cases
+                                  for the county. The last parameter is 
+                                  our interaction term between favor_dem and
+                                  population_density, which is 0.0000001262. It 
+                                  is the slope in the log number of COVID-19 
+                                  cases for a county that is Democratic and 
+                                    has a non-0 population density."),
+                                  
+                                  # The gt_output() function outputs my 
+                                  # regression table for the linear model.
+                                  
                                   gt_output(outputId = "table"),
+                                  
+                                  # I aligned all of this page on
+                                  # center so that the
+                                  # table was not weirdly aligned with the 
+                                  # rest of the text (it was left-aligned
+                                  # before centering it.)
+                                  
                                   align = "center"
-                         ),
+                                  ),
                         tabPanel("Coefficients",
                                  h3("Posterior Distribution of the 
                                     Coefficients"),
@@ -358,13 +445,25 @@ ui <- navbarPage(
                                   the model. Use the buttons on the left
                                   to select a coefficient and
                                   visualize its posterior distribution."),
+                                 
+                                 # Please excuse that in defining the radio-
+                                 # Buttons I go a bit over the 80 character
+                                 # limit for the line. There is no easy
+                                 # way to avoid this without introducing a
+                                 # new line inside the strings and messing
+                                 # up the function.
+                                 
                                  sidebarPanel(
                                    radioButtons("coeff", "Coefficient for:",
                                                 c("Intercept" = "intercept",
                                                   "favor_dem" = "favor_dem",
                                                   "pop_density_per1k" = "pop_density_per1k",
                                                   "favor_dem*pop_density_per1k" = "favor_dem:pop_density_per1k")),
-                                   # br() element to introduce extra vertical spacing
+                                   
+                                   # The br() element is to introduce
+                                   # extra vertical spacing between the
+                                   # sidepanel and the actual plot output.
+                                   
                                    br()
                                  ),
                                  mainPanel(
@@ -381,6 +480,18 @@ ui <- navbarPage(
                                   given by the model."),
                                   plotOutput("distPlot7")
                                   ),
+                        
+                        # I decided to make the following limitations tab
+                        # because my model did not explain my data in the 
+                        # way I expected it to and there were glaring 
+                        # deficiencies in conducting such a simplified linear
+                        # model. Although I did not choose to do this in the
+                        # end, a better model perhaps would have been a
+                        # zero-inflated one, which accounts for excess zeroes
+                        # in the data (in this case, excess zeroes in case
+                        # counts due to the virus arriving earlier in specific
+                        # counties).
+                        
                         tabPanel("Limitations",
                                  h3("Limitations"),
                                  p("It is important to recognize the limitations
@@ -411,6 +522,9 @@ ui <- navbarPage(
                          
              )
     ),
+    
+    # Creating tab with About information
+    
     tabPanel("About", 
              h3("About"),
              p("This is my final project for Harvard University's 
@@ -439,10 +553,28 @@ ui <- navbarPage(
                the data aforementioned to create a variety of visualizations
                and to build a predictive linear model."),
              h3("Data Sources"),
+             
+             # To ensure the easiest way to provide my sources, in case anyone
+             # curious wanted to access them, I decided to link where I got
+             # the data from each source.
+             
+             # It's worth noting that the information I used in producing this
+             # app was aggregated from lots of different sources and it can
+             # all be found in the raw_data folder of this
+             # repository/directory. The final data that my app uses are small
+             # csv files with the minimum amount of data (only what's required
+             # in order to save space in the app) and can be found in the 
+             # data_forapp folder.
+             
              p("2016 County-Level U.S. Presidential Election Results compiled
              by Tony McGovern, Stephen Larson, Bill Morris, & Matt Hodges.
              Found",
                a("here",
+                 
+                 # Please excuse that these links go over the 80 character 
+                 # limit. Separating them into more than one line prevents
+                 # proper functioning.
+                 
                  href = "https://github.com/tonmcg/US_County_Level_Election_Results_08-20")
                ),
              p("2016 State-Level U.S. Presidential Election Data from the",
@@ -479,44 +611,96 @@ ui <- navbarPage(
 )
 
 # Define server
-server <- function(input, output, session) {       
+
+server <- function(input, output, session) {    
+  
+  # The first two dataInputs for the first pair of plots on the Mapping
+  # the Outbreak page
+  
     dataInput_1 <- reactive({
       for_plots1_2 %>%
-            filter(state_abbr == input$state_plot1) %>% 
-            mutate(cases_selectedmonth = ifelse(favor_dem == 0, NA, get(input$month_plot1)))
+        
+        # This filters the data for the state the user selects as input.
+        
+        filter(state_abbr == input$state_plot1) %>% 
+        
+        # In this code, I mutate the county data for the specific state (input)
+        # in order to only put the Republican case counts as NAs,
+        # such that they won't appear filled in on the graph
+        
+        mutate(cases_selectedmonth = ifelse(favor_dem == 0,
+                                            NA, get(input$month_plot1)))
     })
     dataInput_2 <- reactive({
       for_plots1_2 %>%
-          filter(state_abbr == input$state_plot1) %>% 
-          mutate(cases_selectedmonth = ifelse(favor_dem == 1, NA, get(input$month_plot1)))
+        filter(state_abbr == input$state_plot1) %>% 
+        
+        # In this code, I mutate the county data for the specific state
+        # in order to put the Democratic case counts as NAs,
+        # such that they won't appear filled in on the graph
+        
+        mutate(cases_selectedmonth = ifelse(favor_dem == 1,
+                                            NA, get(input$month_plot1)))
     })
+    
+    # The other two dataInputs for the second pair of plots on the Mapping
+    # the Outbreak page
+    
     dataInput_3 <- reactive({
       for_plots1_2 %>%
         filter(state_abbr == input$state_plot2) %>% 
-        mutate(cases_selectedmonth = ifelse(favor_dem == 0, NA, (get(input$month_plot2)/pop_estimate)*100000))
+        
+        # In this code, I mutate the county data for the specific state
+        # in order to put the Republican case counts as NAs.
+        # Additionally, unlike the first two dataInputs, here I actually
+        # include population into determining the fill for cases.
+        # Thus, the fill accounts for population.
+        
+        mutate(cases_selectedmonth = ifelse(favor_dem == 0,
+                                            NA,
+                                            (get(input$month_plot2)
+                                             /pop_estimate)*100000))
     })
     dataInput_4 <- reactive({
       for_plots1_2 %>%
         filter(state_abbr == input$state_plot2) %>% 
-        mutate(cases_selectedmonth = ifelse(favor_dem == 1, NA, (get(input$month_plot2)/pop_estimate)*100000))
+        mutate(cases_selectedmonth = ifelse(favor_dem == 1,
+                                            NA,
+                                            (get(input$month_plot2)
+                                             /pop_estimate)*100000))
     })
+    
+    # Data input for the reactive plot in Flattening the Curve tab
+    
     dataInput_5 <- reactive({
       data_curve %>% 
+        
+        # Filters the data according to the state the user selects
+        
         filter(state_abbr == input$state_plot5)
     })
     
-    
+    # The first two renderPlots for the first pair of plots on the Mapping
+    # the Outbreak page
     
     output$distPlot1 <- renderPlot({
-        # data_1 <- st_sf(tibble(dataInput_1()))
         ggplot(st_sf(tibble(dataInput_1())), aes(fill = cases_selectedmonth)) +
           geom_sf() +
+        
+          # I selected the following gradient fill because it matches
+          # the colors associated with the Democratic party in the U.S.
+        
           scale_fill_gradient(low = "lightblue2",
                               high =  "mediumblue",
                               na.value = "white") +
-            theme_bw() +
+          theme_bw() +
+          
+          # Please excuse the length of the title (> 80 character limit);
+          # separating the title onto two lines separates the actual title
+          # on my plot, which I don't want.
+        
           labs(title = "Visualization of new COVID-19 cases per month in Democratic counties",
-                 fill = "Total number of confirmed cases") +
+               fill = "Total number of confirmed cases") +
           theme(axis.text = element_text(size = 8))
     })
     output$distPlot2 <- renderPlot({
@@ -530,6 +714,10 @@ server <- function(input, output, session) {
                  fill = "Total number of confirmed cases") +
                 theme(axis.text = element_text(size = 8))
     })
+    
+    # The second two renderPlots for the second pair of plots on the Mapping
+    # the Outbreak page
+    
     output$distPlot3 <- renderPlot({
       ggplot(st_sf(tibble(dataInput_3())), aes(fill = cases_selectedmonth)) +
         geom_sf() +
@@ -539,6 +727,10 @@ server <- function(input, output, session) {
         theme_bw() +
         labs(title = "Visualization of new COVID-19 cases per month in Democratic counties",
              fill = "Confirmed cases per 100,000 people") +
+        
+        # I selected the follow text size for the axes because the default
+        # size looked far too clumped together (it was illegible).
+        
         theme(axis.text = element_text(size = 8))
     })
     output$distPlot4 <- renderPlot({
@@ -552,10 +744,18 @@ server <- function(input, output, session) {
              fill = "Confirmed cases per 100,000 people") +
         theme(axis.text = element_text(size = 8))
     })
+    
+    # Plots for the Flattening the Curve tab
+    
     output$distPlot5 <- renderPlot({
       ggplot(tibble(dataInput_5()), aes(month, newcases_per100k_avg,
                                         color = as.factor(favor_dem))) +
         geom_line(aes(group = favor_dem)) +
+        
+        # The breaks for the plot are set up such that each break is a month
+        # and the labels are the months in words, which is easier to 
+        # read than numerical months.
+        
         scale_x_continuous(breaks = c(3, 4, 5, 6, 7, 8, 9, 10, 11),
                            labels = c("Mar.", "Apr.", "May", "Jun.", "Jul.",
                                       "Aug.", "Sept.", "Oct.", "Nov.")) +
@@ -582,47 +782,75 @@ server <- function(input, output, session) {
              y = "Average COVID-19 cases per 100,000 people",
              color = "Party")
     })
+    
+    # Rendering the table for the regression in the Model page
+    
     output$table <- render_gt(
       expr = gt_tbl,
       height = px(600),
       width = px(600)
     )
+    
+    # Posterior Predictive Distribution graph for Model page
+    
     output$distPlot7 <- renderPlot({
       pp %>% 
+        
+        # Need to rename the columns because they come out of posterior predict
+        # as just numbers. This also makes the legend easier.
+        
         rename(Democratic = `1`,
                Republican = `2`) %>% 
+        
+        # Pivoting the data longer in order to plot both posterior predictive
+        # distributions on the same plot.
+        
         pivot_longer(cols = Democratic:Republican, 
                      names_to = "Party",
                      values_to = "log_normalized_casesdec4") %>% 
         ggplot(aes(log_normalized_casesdec4, fill = Party)) +
-        geom_histogram(aes(y = after_stat(count/sum(count))),
-                       alpha = 0.4, 
-                       bins = 100, 
-                       position = "identity") +
-        labs(title = "Posterior Predictive Distribution",
-             subtitle = "For Democratic and Republican counties with average population densities",
-             x = "COVID-19 Cases per 1000 people",
-             y = "Probability") + 
-        scale_fill_manual(values = c("skyblue1", "tomato2"),
-                          labels = c("Democratic", "Republican")) +
-        scale_x_continuous(labels = scales::number_format()) +
-        scale_y_continuous(labels = scales::percent_format()) +
-        theme_classic()
+          geom_histogram(aes(y = after_stat(count/sum(count))),
+                         alpha = 0.4, 
+                         bins = 100, 
+                         position = "identity") +
+          labs(title = "Posterior Predictive Distribution",
+               subtitle = "For Democratic and Republican counties with average population densities",
+               x = "COVID-19 Cases per 1000 people",
+               y = "Probability") + 
+          scale_fill_manual(values = c("skyblue1", "tomato2"),
+                            labels = c("Democratic", "Republican")) +
+          scale_x_continuous(labels = scales::number_format()) +
+          scale_y_continuous(labels = scales::percent_format()) +
+          theme_classic()
     })
+    
+    # Rendering plot of Coefficients for Model tab
+    
     output$distPlot8 <- renderPlot({
       f1 %>% 
         as_tibble() %>% 
         rename("intercept" = `(Intercept)`) %>% 
+        
+        # The following line of code changes the x variable (i.e. what is
+        # plotted according to the input/coefficient chosen). The get()
+        # function is necessary in order to grab the variable and not
+        # be interpreted as merely a string.
+        
         ggplot(aes(x = (get(input$coeff)))) + 
-        geom_histogram(aes(y = after_stat(count/sum(count))),
+          geom_histogram(aes(y = after_stat(count/sum(count))),
                        bins = 100,
                        fill = "cornflowerblue") +
-        labs(title = paste("Posterior Distribution for the Coefficient of", input$coeff),
-             y = "Probability",
-             x = paste("Coefficient of", input$coeff)) + 
-        scale_y_continuous(labels = scales::percent_format()) +
-        theme_bw()
+          labs(title = paste("Posterior Distribution for the Coefficient of",
+                             input$coeff),
+               y = "Probability",
+               x = paste("Coefficient of", input$coeff)) + 
+          scale_y_continuous(labels = scales::percent_format()) +
+          theme_bw()
     })
+    
+    # Rendering image of equation for Model tab. The dimensions are specific
+    # so the picture does not look oddly stretched.
+    
     output$Image1 <- renderImage({ 
       list(src = "data_forapp/equation.jpg",
            width = 783,
@@ -630,23 +858,36 @@ server <- function(input, output, session) {
     },
     deleteFile = FALSE)
     
+    # Rendering 3 plots for the Tracking Testing tab
+    
     output$distPlot9 <- renderPlot({
       testing %>% 
+        
+        # In order to create this plot, I averaged the total PCR test specimens
+        # for states in the US by ideology.
+        
         group_by(state_lean) %>% 
         mutate(us_avgtesting = mean(totaltestsviral_per1k)) %>% 
         select(us_avgtesting, state_lean) %>% 
         unique() %>% 
         ggplot(aes(state_lean, us_avgtesting, fill = state_lean)) +
-        geom_col() +
-        scale_fill_manual(values = c("skyblue1", "tomato2"),
-                          labels = c("Democratic", "Republican")) +
-        labs(title = "Average tests per 1,000 people in each state by political affiliation",
-             x = "Political Affiliation of Each State",
-             y = "Average Number of PCR Tests per 1,000 People") +
-        theme_bw() +
-        theme(legend.position = "none") 
+          geom_col() +
+          scale_fill_manual(values = c("skyblue1", "tomato2"),
+                            labels = c("Democratic", "Republican")) +
+          labs(title = "Average tests per 1,000 people in each state by political affiliation",
+               x = "Political Affiliation of Each State",
+               y = "Average Number of PCR Tests per 1,000 People") +
+          theme_bw() +
+          theme(legend.position = "none") 
     })
     output$distPlot10 <- renderPlot({
+      
+      # I added shape, color, and fill aesthetics in order to make it easy
+      # to track the patterns by political affiliation. By doing this,
+      # I will not make a summary plot for the whole United States, as I think
+      # the smooth line ("lm" type) is fairly informative of general trends.
+      
+      
       ggplot(testing, aes(state_casesdec4_per1k,totaltestsviral_per1k,
                           color = state_lean,
                           shape = state_lean)) +
@@ -682,6 +923,9 @@ server <- function(input, output, session) {
              y = "Total PCR Tests Per 1,000 People for Each State") +
         theme_bw() 
     })
+    
+    # Rendering plot for Deaths tab
+    
     output$distPlot12 <- renderPlot({
       deaths_usplot %>% 
         ggplot(aes(month, newdeaths_per100k_avg,
